@@ -1,0 +1,8 @@
+{
+  "name": "Instant Policy Env",
+  "image": "mcr.microsoft.com/devcontainers/python:3.10",
+  "features": {
+    "ghcr.io/devcontainers/features/conda:1": {}
+  },
+  "postCreateCommand": "conda init bash"
+}
