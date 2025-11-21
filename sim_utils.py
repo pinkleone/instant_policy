@@ -10,6 +10,7 @@ from rlbench.observation_config import ObservationConfig
 from tqdm import trange
 from utils import *
 from instant_policy import sample_to_cond_demo
+from segment import get_mask
 
 
 # Some examples of RLBench tasks
@@ -53,12 +54,20 @@ def rl_bench_demo_to_sample(demo):
     return sample
 
 
-def get_point_cloud(obs, camera_names=('front', 'left_shoulder', 'right_shoulder')):
+def get_point_cloud(obs, task_name=None, camera_names=('front', 'left_shoulder', 'right_shoulder')):
     pcds = []
     for camera_name in camera_names:
         ordered_pcd = getattr(obs, f'{camera_name}_point_cloud')
-        mask = getattr(obs, f'{camera_name}_mask')
-        masked_pcd = ordered_pcd[mask > 60]  # Hack to get segmentations easily.
+
+        # If task name is given (i.e. we are live), apply segmentation mask
+        if task_name is not None:
+            mask = get_mask(getattr(obs, f'{camera_name}_rgb'), task_name)
+            masked_pcd = ordered_pcd[mask]
+        # If we are in demo collection, use ground truth mask
+        else:
+            mask = getattr(obs, f'{camera_name}_mask')
+            masked_pcd = ordered_pcd[mask > 60]  # Hack to get segmentations easily.
+        
         pcds.append(masked_pcd)
 
     return np.concatenate(pcds, axis=0)
@@ -133,7 +142,7 @@ def rollout_model(model, num_demos, task_name='phone_on_base', max_execution_ste
         for k in range(max_execution_steps):
             curr_obs = task.get_observation()
             T_w_e = pose_to_transform(curr_obs.gripper_pose)
-            full_sample['live']['obs'] = [transform_pcd(subsample_pcd(get_point_cloud(curr_obs)),
+            full_sample['live']['obs'] = [transform_pcd(subsample_pcd(get_point_cloud(curr_obs, task_name=task_name)),
                                                         np.linalg.inv(T_w_e))]
             full_sample['live']['grips'] = [curr_obs.gripper_open]            
             full_sample['live']['T_w_es'] = [T_w_e]            
