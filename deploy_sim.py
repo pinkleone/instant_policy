@@ -30,5 +30,5 @@ if __name__ == '__main__':
     model.eval()
     ####################################################################################################################
     sr = rollout_model(model, num_demos, task_name, num_rollouts=num_rollouts, execution_horizon=8,
-                       num_traj_wp=10, restrict_rot=restrict_rot)
+                       num_traj_wp=10, restrict_rot=restrict_rot, headless=True, use_segmentation=True)
     print('Success rate:', sr)

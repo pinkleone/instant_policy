@@ -11,7 +11,7 @@ from tqdm import trange
 from utils import *
 from instant_policy import sample_to_cond_demo
 from segment import get_mask
-
+from PIL import Image, ImageDraw
 
 # Some examples of RLBench tasks
 TASK_NAMES = {
@@ -46,7 +46,7 @@ def rl_bench_demo_to_sample(demo):
     sample = {'pcds': [], 'T_w_es': [], 'grips': []}
 
     for k, obs in enumerate(demo):
-        pcd = get_point_cloud(obs)
+        pcd, _, _ = get_point_cloud(obs)
         sample['pcds'].append(pcd)
         sample['T_w_es'].append(pose_to_transform(obs.gripper_pose))
         sample['grips'].append(obs.gripper_open)
@@ -54,28 +54,50 @@ def rl_bench_demo_to_sample(demo):
     return sample
 
 
-def get_point_cloud(obs, task_name=None, camera_names=('front', 'left_shoulder', 'right_shoulder')):
+def get_point_cloud(obs, task_name=None, camera_names=('front', 'left_shoulder', 'right_shoulder'), use_segmentation=False, use_bbox=False):
     pcds = []
+    debug_masks = {}
+    debug_bboxes = {}
     for camera_name in camera_names:
         ordered_pcd = getattr(obs, f'{camera_name}_point_cloud')
+        mask = getattr(obs, f'{camera_name}_mask')
 
-        # If task name is given (i.e. we are live), apply segmentation mask
-        if task_name is not None:
-            mask = get_mask(getattr(obs, f'{camera_name}_rgb'), task_name)
-            masked_pcd = ordered_pcd[mask]
+        # If task name is given (i.e. we are live), apply fast sam segmentation
+        if task_name is not None and use_segmentation:
+            if use_bbox:
+                pixels = np.where(mask > 60)
+                bbox = None
+                if len(pixels[0]) > 0:
+                    y_min, y_max = np.min(pixels[0]), np.max(pixels[0])
+                    x_min, x_max = np.min(pixels[1]), np.max(pixels[1])
+                    bbox = [x_min, y_min, x_max, y_max]
+                
+                debug_bboxes[camera_name] = bbox
+                # Get mask from segmentation model
+                segmented_mask = get_mask(getattr(obs, f'{camera_name}_rgb'), task_name, bbox=bbox)
+            else:    
+                segmented_mask = get_mask(getattr(obs, f'{camera_name}_rgb'), task_name)
+            
         # If we are in demo collection, use ground truth mask
         else:
-            mask = getattr(obs, f'{camera_name}_mask')
-            masked_pcd = ordered_pcd[mask > 60]  # Hack to get segmentations easily.
-        
+            segmented_mask = mask > 60 # Hack to get segmentations easily.
+
+        debug_masks[camera_name] = segmented_mask
+        masked_pcd = ordered_pcd[segmented_mask]  
         pcds.append(masked_pcd)
 
-    return np.concatenate(pcds, axis=0)
+    return np.concatenate(pcds, axis=0), debug_masks, debug_bboxes
 
 
-def create_sim_env(task_name, headless=False, restrict_rot=True):
+def create_sim_env(task_name, headless=False, restrict_rot=True, use_segmentation=False):
     obs_config = ObservationConfig()
     obs_config.set_all(True)
+    # Increase resolution to aid segmentation
+    if use_segmentation:
+        camera_resolution = (512, 512)
+        obs_config.front_camera.image_size = camera_resolution
+        obs_config.left_shoulder_camera.image_size = camera_resolution
+        obs_config.right_shoulder_camera.image_size = camera_resolution
     action_mode = MoveArmThenGripper(
         arm_action_mode=EndEffectorPoseViaIK(),
         gripper_action_mode=Discrete()
@@ -105,9 +127,9 @@ def create_sim_env(task_name, headless=False, restrict_rot=True):
     return env, task
 
 def rollout_model(model, num_demos, task_name='phone_on_base', max_execution_steps=30,
-                  execution_horizon=8, num_rollouts=2, headless=False, num_traj_wp=10, restrict_rot=True):
+                  execution_horizon=8, num_rollouts=2, headless=False, num_traj_wp=10, restrict_rot=True, use_segmentation=False):
     ####################################################################################################################
-    env, task = create_sim_env(task_name, headless=headless, restrict_rot=restrict_rot)
+    env, task = create_sim_env(task_name, headless=headless, restrict_rot=restrict_rot, use_segmentation=use_segmentation)
     ####################################################################################################################
     full_sample = {
         'demos': [dict()] * num_demos,
@@ -135,19 +157,55 @@ def rollout_model(model, num_demos, task_name='phone_on_base', max_execution_ste
                 done = True
             except:
                 continue
+        
+        # Save frames for gif generation
+        frame_dict = {
+            'front': [],
+            'left_shoulder': [],
+            'right_shoulder': []
+        }
 
         env_action = np.zeros(8)
         # number of steps in rollouts.
         success = 0
         for k in range(max_execution_steps):
+            if k % 5 == 0:
+                tqdm.write(f"Rollout {i}: Step {k}/{max_execution_steps}")
+
             curr_obs = task.get_observation()
+
+            pcd, debug_masks, debug_bboxes = get_point_cloud(curr_obs, task_name=task_name, use_segmentation=use_segmentation)
+
             T_w_e = pose_to_transform(curr_obs.gripper_pose)
-            full_sample['live']['obs'] = [transform_pcd(subsample_pcd(get_point_cloud(curr_obs, task_name=task_name)),
+            full_sample['live']['obs'] = [transform_pcd(subsample_pcd(pcd),
                                                         np.linalg.inv(T_w_e))]
             full_sample['live']['grips'] = [curr_obs.gripper_open]            
             full_sample['live']['T_w_es'] = [T_w_e]            
 
             actions, grips = model.predict_actions(full_sample)
+
+            # Save frames for gif
+            for cam_name in frame_dict.keys():
+                # Get Raw Image
+                rgb_raw = getattr(curr_obs, f'{cam_name}_rgb')
+                img = Image.fromarray(rgb_raw)
+                
+                # Overlay Mask
+                if cam_name in debug_masks and debug_masks[cam_name] is not None:
+                    current_mask = debug_masks[cam_name]
+                    if np.sum(current_mask) > 0:
+                        overlay = np.zeros_like(rgb_raw)
+                        overlay[current_mask] = [0, 255, 0]
+                        overlay_img = Image.fromarray(overlay)
+                        img = Image.blend(img.convert("RGBA"), overlay_img.convert("RGBA"), alpha=0.3)
+                        img = img.convert("RGB")
+                # Overlay BBox
+                if cam_name in debug_bboxes and debug_bboxes[cam_name] is not None:
+                    draw = ImageDraw.Draw(img)
+                    draw.rectangle(debug_bboxes[cam_name], outline="red", width=3)
+
+                # Store frame
+                frame_dict[cam_name].append(img)
 
             for j in range(execution_horizon):
                 env_action[:7] = transform_to_pose(T_w_e @ actions[j])
@@ -163,6 +221,20 @@ def rollout_model(model, num_demos, task_name='phone_on_base', max_execution_ste
             else:
                 continue
             break
+
+        # Save gifs
+        tqdm.write(f"Saving GIFs...")
+        for cam_name, frames in frame_dict.items():
+            if len(frames) > 0:
+                frames[0].save(
+                    f'media_high_res/{task_name}_{i}_{cam_name}.gif',
+                    save_all=True,
+                    append_images=frames[1:],
+                    duration=250,
+                    loop=0
+                )
+        tqdm.write(f"Rollout {i}: Saved.")
+
         successes.append(success)
         pbar.set_description(f'Evaluating model, SR: {sum(successes)}/{len(successes)}')
         pbar.refresh()
