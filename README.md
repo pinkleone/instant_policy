@@ -3,6 +3,20 @@
 ### Contribution
 Integrated FastSAM into the simulated rollout to generate segmentation masks.
 
+We are able to succsfully rollout the 'ToiletSeatDown' task using segmentation masks obtained from FastSAM with a text prompt.
+
+<p align="center">
+<img src="./media_high_res/toilet_seat_down_0_right_shoulder.gif" alt="drawing" width="700"/>
+</p>
+
+In general, most rollouts failed. We initially attempted to prompt the model to generate the correct segementation via a text prompt but did not see consistent results. Increasing the resolution of the simulation cameras only improved performance marginally. We then tried using the segmentation 'hack' to create a bbox to prompt the model to generate the segementations but still saw poor performance.  
+
+<p align="center">
+<img src="./media_bbox/plate_out_0_front.gif" alt="drawing" width="700"/>
+</p>
+
+The model struggles to segment the same objects consistently between frames, especially when there is occlusion due to the arm or other objects. This highlights the need for a tracking model or a more advanced segmentation model such as SAM3 that has memory and can perform tracking itself.
+
 ### Original
 Code for deploying a pre-trained model on Linux machines from the paper: "Instant Policy: In-Context Imitation Learning via Graph Diffusion", 
 [Project Webpage](https://www.robot-learning.uk/instant-policy)
