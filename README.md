@@ -1,5 +1,9 @@
-# Instant Policy
+# Instant Policy: FastSAM Fork
 
+### Contribution
+Integrated FastSAM into the simulated rollout to generate segmentation masks.
+
+### Original
 Code for deploying a pre-trained model on Linux machines from the paper: "Instant Policy: In-Context Imitation Learning via Graph Diffusion", 
 [Project Webpage](https://www.robot-learning.uk/instant-policy)
 
@@ -35,6 +39,12 @@ Download pre-trained weights.
 
 ```
 ./download_weights.sh
+```
+
+Download FastSAM Weights.
+
+```
+wget [https://github.com/ultralytics/assets/releases/download/v8.2.0/FastSAM-x.pt](https://github.com/ultralytics/assets/releases/download/v8.2.0/FastSAM-x.pt)
 ```
 
 Run inference.
